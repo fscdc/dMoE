@@ -1,0 +1,14 @@
+```bash
+git clone https://github.com/openai/human-eval
+pip install -e human-eval
+```
+
+For the [OpenAI API](https://pypi.org/project/openai/):
+```bash
+pip install openai
+```
+
+For the [Anthropic API](https://docs.anthropic.com/claude/docs/quickstart-guide):
+```bash
+pip install anthropic
+```
