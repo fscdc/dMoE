@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="description" content="dMoE: dLLMs with Learnable Block Experts">
+  <meta name="keywords" content="Diffusion Language Models, Mixture of Experts, dLLMs, LLaDA">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dMoE: dLLMs with Learnable Block Experts</title>
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="./static/js/fontawesome.all.min.js"></script>
+  <script src="./static/js/bulma-carousel.min.js"></script>
+  <script src="./static/js/bulma-slider.min.js"></script>
+  <script src="./static/js/index.js"></script>
+</head>
+
+<body>
+
+  <nav class="navbar" role="navigation" aria-label="main navigation">
+    <div class="navbar-brand">
+      <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false">
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+      </a>
+    </div>
+    <div class="navbar-menu">
+      <div class="navbar-start" style="flex-grow: 1; justify-content: center;">
+        <a class="navbar-item" href="https://github.com/fscdc/dMoE">
+          <span class="icon">
+            <i class="fas fa-home"></i>
+          </span>
+        </a>
+      </div>
+    </div>
+  </nav>
+
+
+  <section class="hero">
+    <div class="hero-body">
+      <div class="container is-max-desktop">
+        <div class="columns is-centered">
+          <div class="column has-text-centered">
+            <h1 class="title is-1 publication-title">dMoE: dLLMs with Learnable Block Experts</h1>
+            <div class="is-size-5 publication-authors">
+                <span class="author-block">
+                    <a href="https://fscdc.github.io/">Sicheng Feng</a><sup>1</sup>&#8192;
+                  </span>
+                  <span class="author-block">
+                    <a href="https://czg1225.github.io/chenzigeng99/">Zigeng Chen</a><sup>1</sup>&#8192;
+                  </span>
+                  <span class="author-block">
+                    <a href="https://fangggf.github.io/">Gongfan Fang</a><sup>1</sup>&#8192;
+                  </span>
+                  <span class="author-block">
+                    <a href="https://horseee.github.io/">Xinyin Ma</a><sup>1</sup>&#8192;
+                  </span>
+                  <span class="author-block">
+                    <a href="https://sites.google.com/site/sitexinchaowang/">Xinchao Wang</a><sup>1*</sup>&#8192;
+                  </span>
+            </div>
+            <h1 style="font-size:23px;font-weight:bold">2026</h1>
+
+            <div class="is-size-5 publication-authors">
+                <span><sup>1</sup>National University of Singapore, Singapore</span>
+            </div>
+
+            <div style="font-size:15px">
+              <span><sup>&ast;</sup>Corresponding author: xinchao@nus.edu.sg</span></br></br>
+            </div>
+
+            <div class="columns is-centered">
+              <div class="column is-narrow">
+                <figure class="image">
+                  <img src="figure/nus-logo.jpg" alt="NUS" style="height: 96px; object-fit: contain;">
+                </figure>
+              </div>
+            </div>
+
+            <div class="column has-text-centered">
+              <div class="publication-links">
+                <!-- PDF Link. -->
+                <span class="link-block">
+                  <a href="todo"
+                    class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="fas fa-file-pdf"></i>
+                    </span>
+                    <span>PDF</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a href="todo" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="ai ai-arxiv"></i>
+                    </span>
+                    <span>ArXiv</span>
+                  </a>
+                </span>
+                <!-- Code Link. -->
+                <span class="link-block">
+                  <a href="https://github.com/fscdc/dMoE"
+                    class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="fab fa-github"></i>
+                    </span>
+                    <span>Code</span>
+                  </a>
+                </span>
+                <!-- Model Link. -->
+                <span class="link-block">
+                  <a href="https://huggingface.co/FSCCS/dMoE-16B"
+                    class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <img src="https://huggingface.co/front/assets/huggingface_logo-noborder.svg" alt="Hugging Face" style="width: 20px; height: 20px;">
+                    </span>
+                    <span>Model</span>
+                  </a>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <section class="hero teaser">
+    <div class="container is-max-desktop">
+      <div class="hero-body">
+        <div align='center'>
+          <a><img src="./figure/overview.png" style="max-width: 100%;"></a>
+        </div>
+        <div class="content has-text-justified" style="margin-top: 1rem;">
+          Overview of dMoE. We introduce block-level Mixture-of-Experts routing into diffusion large language models (dLLMs), enabling the model to adaptively select computation paths during diffusion-based generation. Built on top of LLaDA-2.0-mini, dMoE achieves an improved efficiency-accuracy trade-off without architectural changes to the base model.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container is-max-desktop">
+      <!-- Abstract. -->
+      <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+          <h2 class="title is-3">Abstract</h2>
+          <div class="content has-text-justified">
+            Diffusion Large Language Models (dLLMs) represent a promising paradigm beyond autoregressive modeling, enabling flexible and parallel token generation. However, their uniform computation across all transformer blocks introduces unnecessary overhead during inference. In this work, we present <strong>dMoE</strong>, a framework that introduces Learnable Block Experts into dLLMs. dMoE adds block-level Mixture-of-Experts routing on top of LLaDA-2.0-mini, enabling the model to adaptively activate a subset of transformer blocks for each input during the diffusion denoising process. This plug-and-play design requires no architectural changes to the base model and achieves a favorable efficiency-accuracy trade-off. Extensive evaluations demonstrate that dMoE achieves competitive performance on reasoning and general benchmarks including GSM8K, MATH500, MMLU, and ARC-C, while reducing unnecessary computation through adaptive expert activation.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <section class="section" id="BibTeX">
+    <div class="container is-max-desktop content">
+      <h2 class="title">BibTeX</h2>
+      <pre><code>@article{feng2026dmoe,
+  title={dMoE: dLLMs with Learnable Block Experts},
+  author={Feng, Sicheng and Chen, Zigeng and Fang, Gongfan and Ma, Xinyin and Wang, Xinchao},
+  journal={arXiv preprint arXiv:TODO},
+  year={2026},
+}</code></pre>
+    </div>
+  </section>
+
+
+  <footer class="footer">
+    <div align="center" class="container">
+      <div class="columns is-centered">
+        <div class="content">
+          This website is borrowed from <a href="https://github.com/nerfies/nerfies.github.io">nerfies</a>.
+        </div>
+      </div>
+    </div>
+  </footer>
+
+</body>
+
+</html>
