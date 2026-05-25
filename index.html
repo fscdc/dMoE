@@ -155,13 +155,48 @@
         <div class="column is-four-fifths">
           <h2 class="title is-3">Abstract</h2>
           <div class="content has-text-justified">
-            Diffusion Large Language Models (dLLMs) represent a promising paradigm beyond autoregressive modeling, enabling flexible and parallel token generation. However, their uniform computation across all transformer blocks introduces unnecessary overhead during inference. In this work, we present <strong>dMoE</strong>, a framework that introduces Learnable Block Experts into dLLMs. dMoE adds block-level Mixture-of-Experts routing on top of LLaDA-2.0-mini, enabling the model to adaptively activate a subset of transformer blocks for each input during the diffusion denoising process. This plug-and-play design requires no architectural changes to the base model and achieves a favorable efficiency-accuracy trade-off. Extensive evaluations demonstrate that dMoE achieves competitive performance on reasoning and general benchmarks including GSM8K, MATH500, MMLU, and ARC-C, while reducing unnecessary computation through adaptive expert activation.
+            Diffusion Large Language Models (dLLMs) have recently emerged as a promising alternative to autoregressive models, offering competitive performance while naturally supporting parallel decoding. However, as dLLMs are increasingly integrated with Mixture-of-Experts (MoE) architectures to scale model capacity, a fundamental mismatch arises between block parallel decoding and token-level expert selection. Specifically, each dLLM forward pass processes multiple tokens with bidirectional dependencies, whereas conventional MoE layers route each token independently. This mismatch substantially increases the number of uniquely activated experts, making inference increasingly memory-bound. To address this, we propose dMoE, a simple yet effective block-level MoE framework. The central idea of dMoE is to aggregate token-level expert distributions within each block into a unified block-level expert distribution, which is then used to guide expert routing in a more coherent manner. In this way, dMoE substantially reduces the number of uniquely activated experts during inference without sacrificing performance, thereby mitigating the memory-bound bottleneck. Extensive experiments across a variety of benchmarks demonstrate the effectiveness of dMoE. On average, dMoE reduces the number of uniquely activated experts from 69.5 to 14.6 while retaining 99.11% of the original performance. Meanwhile, it reduces memory usage by 76.64% to 79.84% and achieves 1.14&times; to 1.66&times; end-to-end latency speedup.
           </div>
         </div>
       </div>
     </div>
   </section>
 
+
+  
+
+
+  <section class="section">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+          <h2 class="title is-3">Main Results</h2>
+          <div class="content has-text-justified">
+            dMoE retains competitive performance across reasoning and general benchmarks (GSM8K, MATH500, MMLU, ARC-C) while substantially reducing the number of uniquely activated experts.
+          </div>
+          <figure>
+            <img src="./figure/result-1.png" style="max-width: 100%;">
+          </figure>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+          <h2 class="title is-3">Efficiency Improvement</h2>
+          <div class="content has-text-justified">
+            dMoE reduces memory usage by 76.64%–79.84% and achieves 1.14&times;–1.66&times; end-to-end latency speedup compared to the full-expert baseline.
+          </div>
+          <figure>
+            <img src="./figure/result-2.png" style="max-width: 100%;">
+          </figure>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <section class="section" id="BibTeX">
     <div class="container is-max-desktop content">
