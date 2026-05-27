@@ -182,6 +182,7 @@ tmp*.txt
 
 # Plots
 *.pdf
+!arxiv_1.pdf
 
 # personnal
 work_dirs/

@@ -9,6 +9,8 @@
 ![](https://img.shields.io/github/last-commit/fscdc/dmoe?color=green)
 ![](https://img.shields.io/badge/PRs-Welcome-blue)
 <a href="todo" target="_blank"><img src="https://img.shields.io/badge/arXiv-todo-009688.svg" alt="arXiv"></a>
+<a href="https://huggingface.co/FSCCS/dMoE-16B" target="_blank"><img src="https://img.shields.io/badge/🤗%20HuggingFace-dMoE--16B-
+yellow.svg" alt="HuggingFace"></a>
 
 </div>
 
@@ -23,7 +25,7 @@ https://github.com/user-attachments/assets/fb2fb91d-5d25-4cb1-8d46-2f2fe4248f05
 
 ## ⭐ Updates
 
-- **[Coming soon]**: Code, model and paper are released.
+- **[4.26.2026]**: Code and model are released. ArXiv submission is on hold; paper preview available [here](assets/arxiv_1.pdf).
 
 ---
 
