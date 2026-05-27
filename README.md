@@ -31,7 +31,8 @@ https://github.com/user-attachments/assets/fb2fb91d-5d25-4cb1-8d46-2f2fe4248f05
 
 ## 💪 Highlights
 
-- **Learnable Block Experts**: Introduces block-level MoE routing into dLLMs, enabling the model to adaptively select computation paths during diffusion-based generation.
+- **Learnable Block Experts**: Introduces block-level MoE routing into dLLMs, drastically compressing the number of activated unique experts across diffusion steps — directly targeting memory footprint reduction.
+- **Reduced MoE Bandwidth**: By constraining expert activation at the block level, dMoE significantly reduces memory bandwidth consumed by expert weight loading during the block diffusion process.
 - **Improved Efficiency-Accuracy Trade-off**: dMoE achieves competitive performance on reasoning and general benchmarks while reducing unnecessary computation through adaptive expert activation.
 - **Plug-and-play on LLaDA-2.0**: Built directly on top of LLaDA-2.0-mini without architectural changes, enabling straightforward extension to other masked dLLMs.
 
