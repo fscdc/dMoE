@@ -249,7 +249,7 @@ bash scripts_moe/run_origin.sh
 
 ## ☀️ Acknowledgement
 
-Our code builds on [dFactory](https://github.com/inclusionAI/dFactory). We acknowledge these great works for laying the groundwork that made our approach possible.
+We sincerely thank Huawei for their support and contribution to the research and development of this model and algorithm. Furthermore, our code builds on [dFactory](https://github.com/inclusionAI/dFactory). We acknowledge these great works for laying the groundwork that made our approach possible.
 
 ---
 
