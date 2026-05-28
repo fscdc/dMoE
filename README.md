@@ -9,8 +9,7 @@
 ![](https://img.shields.io/github/last-commit/fscdc/dmoe?color=green)
 ![](https://img.shields.io/badge/PRs-Welcome-blue)
 <a href="todo" target="_blank"><img src="https://img.shields.io/badge/arXiv-todo-009688.svg" alt="arXiv"></a>
-<a href="https://huggingface.co/FSCCS/dMoE-16B" target="_blank"><img src="https://img.shields.io/badge/🤗%20HuggingFace-dMoE--16B-
-yellow.svg" alt="HuggingFace"></a>
+<a href="https://huggingface.co/FSCCS/dMoE-16B" target="_blank"><img src="https://img.shields.io/badge/🤗%20HuggingFace-dMoE--16B-yellow.svg" alt="HuggingFace"></a>
 
 </div>
 
