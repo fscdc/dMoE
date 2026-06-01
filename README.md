@@ -8,14 +8,14 @@
 ![](https://img.shields.io/github/forks/fscdc/dmoe?color=lightblue)
 ![](https://img.shields.io/github/last-commit/fscdc/dmoe?color=green)
 ![](https://img.shields.io/badge/PRs-Welcome-blue)
-<a href="todo" target="_blank"><img src="https://img.shields.io/badge/arXiv-todo-009688.svg" alt="arXiv"></a>
+<a href="https://arxiv.org/abs/2605.30876" target="_blank"><img src="https://img.shields.io/badge/arXiv-2605.30876-009688.svg" alt="arXiv"></a>
 <a href="https://huggingface.co/FSCCS/dMoE-16B" target="_blank"><img src="https://img.shields.io/badge/🤗%20HuggingFace-dMoE--16B-yellow.svg" alt="HuggingFace"></a>
 
 </div>
 
 https://github.com/user-attachments/assets/fb2fb91d-5d25-4cb1-8d46-2f2fe4248f05
 
-> **[dMoE: dLLMs with Learnable Block Experts](todo)** \
+> **[dMoE: dLLMs with Learnable Block Experts](https://arxiv.org/abs/2605.30876)** \
 > [Sicheng Feng](https://fscdc.github.io/)<sup>1</sup>, [Zigeng Chen](https://czg1225.github.io/chenzigeng99/)<sup>1</sup>, [Gongfan Fang](https://fangggf.github.io/)<sup>1</sup>, [Xinyin Ma](https://horseee.github.io/)<sup>1</sup>, [Xinchao Wang](https://sites.google.com/site/sitexinchaowang/)<sup>1,*</sup> \
 > <sup>1</sup>National University of Singapore, Singapore \
 > <sup>∗</sup>Corresponding author: xinchao@nus.edu.sg
@@ -261,7 +261,7 @@ If our research assists your work, please give us a star ⭐ or cite us using:
 @article{feng2026dmoe,
   title={dMoE: dLLMs with Learnable Block Experts},
   author={Feng, Sicheng and Chen, Zigeng and Fang, Gongfan and Ma, Xinyin and Wang, Xinchao},
-  journal={arXiv preprint arXiv:TODO},
+  journal={arXiv preprint arXiv:2605.30876},
   year={2026}
 }
 ```
