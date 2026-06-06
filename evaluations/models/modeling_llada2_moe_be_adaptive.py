@@ -27,7 +27,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 
 from transformers.activations import ACT2FN
-from transformers.cache_utils import Cache, DynamicCache
+from transformers.cache_utils import Cache, DynamicCache, DynamicLayer
 from transformers.modeling_attn_mask_utils import (
     _prepare_4d_causal_attention_mask_for_sdpa,
 )
@@ -326,7 +326,7 @@ class LLaDA2MoeGate(nn.Module):
 
         # 5) safeguard: make sure at least guard_size experts are kept
         num_selected = coreset_mask.sum(dim=-1)  # [bsz]
-        guard_size = 12
+        guard_size = 16
         need_fix = num_selected < guard_size
         if need_fix.any():
             fallback_idx = torch.topk(votes, k=guard_size, dim=-1).indices
@@ -337,10 +337,11 @@ class LLaDA2MoeGate(nn.Module):
         return coreset_mask
 
 
-    # @sicheng
+    # @sicheng: process sequence in 32-token blocks, matching training-time behavior.
+    # During denoising steps seq_len=block_length=32 (n_blocks=1, no padding needed).
+    # During prefill seq_len=prefix_end (may be large), handled correctly via multi-block.
     def forward(self, hidden_states):
-        block_size = 32  # @sicheng: for code simplicity, we fix block size here.
-
+        block_size = 32
         bsz, seq_len, _ = hidden_states.shape
 
         hidden_states_2d = hidden_states.view(-1, hidden_states.shape[-1])
@@ -352,46 +353,53 @@ class LLaDA2MoeGate(nn.Module):
         scores = scores.view(bsz, seq_len, self.num_experts)  # [bsz, seq_len, E]
         scores_for_routing = scores + self.expert_bias.view(1, 1, -1)
 
-        if self.config.mode is None:
-            raise ValueError("[sicheng] setting is wrong!")
-
-        block_size = min(block_size, seq_len)
-        prefix_len = seq_len - block_size
-
-        full_topk_idx = torch.empty(
-            (bsz, seq_len, self.top_k),
-            dtype=torch.long,
-            device=hidden_states.device,
-        )
-
-        # 1) prefix tokens follow original routing
-        if prefix_len > 0:
-            prefix_scores = scores_for_routing[:, :prefix_len, :].reshape(-1, self.num_experts)
-            _, prefix_topk_idx = self.group_limited_topk(prefix_scores)
-            full_topk_idx[:, :prefix_len, :] = prefix_topk_idx.view(bsz, prefix_len, self.top_k)
-
-        # 2) conduct coreset selection on the current block
-        block_scores = scores[:, prefix_len:, :]
-        block_scores_for_routing = scores_for_routing[:, prefix_len:, :]
-        current_block_len = block_scores.size(1)
-
-        if self.config.mode == "aggregate":
-            coreset_mask = self.block_experts_select(block_scores_for_routing)
-        else:
+        if self.config.mode != "aggregate":
             raise ValueError(f"Unsupported mode: {self.config.mode}")
 
-        # 3) restrict routing within the selected coreset
-        token_coreset_mask = coreset_mask.unsqueeze(1).expand(-1, current_block_len, -1)
-        constrained_scores = block_scores_for_routing.masked_fill(
-            ~token_coreset_mask, float("-inf")
-        )
+        # Pad sequence length to a multiple of block_size, matching training.
+        block_size = min(block_size, seq_len)
+        pad_len = (block_size - seq_len % block_size) % block_size
+        if pad_len > 0:
+            scores_padded = torch.cat([
+                scores,
+                torch.zeros(bsz, pad_len, self.num_experts, dtype=scores.dtype, device=scores.device),
+            ], dim=1)
+            routing_padded = torch.cat([
+                scores_for_routing,
+                torch.full((bsz, pad_len, self.num_experts), float("-inf"),
+                           dtype=scores_for_routing.dtype, device=scores_for_routing.device),
+            ], dim=1)
+        else:
+            scores_padded = scores
+            routing_padded = scores_for_routing
 
-        _, block_topk_idx = self.group_limited_topk(
+        padded_len = scores_padded.shape[1]
+        n_blocks = padded_len // block_size
+
+        # [bsz, n_blocks, block_size, E] — same layout as training gate
+        routing_blocks = routing_padded.view(bsz, n_blocks, block_size, self.num_experts)
+
+        # Per-block coreset selection (matches training).
+        # block_experts_select expects [B, block_len, E]; merge bsz and n_blocks dims.
+        coreset_mask = self.block_experts_select(
+            routing_blocks.reshape(bsz * n_blocks, block_size, self.num_experts)
+        ).view(bsz, n_blocks, self.num_experts)  # [bsz, n_blocks, E]
+
+        token_coreset_mask = coreset_mask.unsqueeze(2).expand(
+            -1, -1, block_size, -1
+        ).reshape(bsz, padded_len, self.num_experts)
+
+        constrained_scores = routing_padded.masked_fill(~token_coreset_mask, float("-inf"))
+
+        _, topk_idx = self.group_limited_topk(
             constrained_scores.reshape(-1, self.num_experts)
         )
-        full_topk_idx[:, prefix_len:, :] = block_topk_idx.view(bsz, current_block_len, self.top_k)
+        topk_idx = topk_idx.view(bsz, padded_len, self.top_k)
 
-        selected_scores = torch.gather(scores, dim=-1, index=full_topk_idx).reshape(-1, self.top_k).type_as(logits)
+        if pad_len > 0:
+            topk_idx = topk_idx[:, :seq_len, :]
+
+        selected_scores = torch.gather(scores, dim=-1, index=topk_idx).reshape(-1, self.top_k).type_as(logits)
 
         topk_weight = (
             selected_scores / (selected_scores.sum(dim=-1, keepdim=True) + 1e-20)
@@ -400,7 +408,7 @@ class LLaDA2MoeGate(nn.Module):
         )
         topk_weight = topk_weight * self.routed_scaling_factor
 
-        return full_topk_idx.view(-1, self.top_k), topk_weight, logits
+        return topk_idx.view(-1, self.top_k), topk_weight, logits
 
 
 class LLaDA2MoeSparseMoeBlock(nn.Module):
@@ -496,6 +504,7 @@ class LLaDA2MoeSparseMoeBlock(nn.Module):
             router_logits.view(bsz, seq_len, -1),
             topk_idx.view(bsz, seq_len, -1),
         )
+
 
     @torch.no_grad()
     def moe_infer(self, x, topk_ids, topk_weight):
@@ -737,82 +746,6 @@ class LLaDA2MoeDecoderLayer(nn.Module):
         self.post_attention_layernorm = LLaDA2MoeRMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
-
-    # def forward(
-    #     self,
-    #     hidden_states: torch.Tensor,
-    #     attention_mask: Optional[torch.Tensor] = None,
-    #     position_ids: Optional[torch.LongTensor] = None,
-    #     past_key_value: Optional[Tuple[torch.Tensor]] = None,
-    #     output_attentions: Optional[bool] = False,
-    #     output_router_logits: Optional[bool] = False,
-    #     use_cache: Optional[bool] = False,
-    #     position_embeddings: Optional[
-    #         Tuple[torch.Tensor, torch.Tensor]
-    #     ] = None,  # necessary, but kept here for BC
-    #     **kwargs,
-    # ) -> Tuple[
-    #     torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
-    # ]:
-    #     """
-    #     Args:
-    #         hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
-    #         attention_mask (`torch.FloatTensor`, *optional*):
-    #             attention mask of size `(batch_size, sequence_length)` if flash attention is used or `(batch_size, 1,
-    #             query_sequence_length, key_sequence_length)` if default attention is used.
-    #         position_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-    #             Indices of positions of each input sequence tokens in the position embeddings. Selected in the range `[0,
-    #             config.n_positions - 1]`.
-    #         past_key_value (`Tuple(torch.FloatTensor)`, *optional*):
-    #             cached past key and value projection states
-    #         output_attentions (`bool`, *optional*):
-    #             Whether to return the attentions tensors of all attention layers. See `attentions` under
-    #             returned tensors for more detail.
-    #         output_router_logits (`bool`, *optional*):
-    #             Whether or not to return the logits of all the routers. They are useful for computing the router loss,
-    #             and should not be returned during inference.
-    #         use_cache (`bool`, *optional*):
-    #             If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
-    #             (see `past_key_values`).
-    #     """
-    #     residual = hidden_states
-
-    #     hidden_states = self.input_layernorm(hidden_states)
-
-    #     # Self Attention
-    #     hidden_states, self_attn_weights, present_key_value = self.attention(
-    #         hidden_states=hidden_states,
-    #         attention_mask=attention_mask,
-    #         position_ids=position_ids,
-    #         past_key_value=past_key_value,
-    #         output_attentions=output_attentions,
-    #         position_embeddings=position_embeddings,
-    #         use_cache=use_cache,
-    #     )
-    #     hidden_states = residual + hidden_states
-
-    #     # Fully Connected
-    #     residual = hidden_states
-    #     hidden_states = self.post_attention_layernorm(hidden_states)
-    #     hidden_states = self.mlp(hidden_states)
-    #     if isinstance(hidden_states, tuple):
-    #         hidden_states, router_logits = hidden_states
-    #     else:
-    #         router_logits = None
-    #     hidden_states = residual + hidden_states.to(residual.device)
-
-    #     outputs = (hidden_states,)
-
-    #     if output_attentions:
-    #         outputs += (self_attn_weights,)
-
-    #     if use_cache:
-    #         outputs += (present_key_value,)
-
-    #     if output_router_logits:
-    #         outputs += (router_logits,)
-
-    #     return outputs
 
     # @sicheng: + time recorder
     def forward(
@@ -1118,6 +1051,7 @@ class LLaDA2MoeModel(LLaDA2MoePreTrainedModel):
                 device=inputs_embeds.device,
             )
             position_ids = position_ids.unsqueeze(0)
+        kv_length = past_seen_tokens + seq_length
         if attention_mask.size() == (batch_size, 1, seq_length, seq_length):
             attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
                 attention_mask,
@@ -1125,9 +1059,16 @@ class LLaDA2MoeModel(LLaDA2MoePreTrainedModel):
                 inputs_embeds,
                 past_seen_tokens,
             )
+        elif attention_mask.size() == (batch_size, 1, seq_length, kv_length):
+            # Non-square mask: current block tokens (q) attending to prefix KV cache + itself (kv).
+            # Already in correct 4D additive format; pass through unchanged.
+            pass
         else:
             raise ValueError(
-                f"LLaDA2.0 only support block attention mask with shape: {(batch_size, 1, seq_length, seq_length)}, the input attention with shape {attention_mask.size()=}!"
+                f"LLaDA2.0 only support block attention mask with shape "
+                f"{(batch_size, 1, seq_length, seq_length)} or "
+                f"{(batch_size, 1, seq_length, kv_length)} (prefix KV cache), "
+                f"got {tuple(attention_mask.size())}"
             )
         # embed positions
         hidden_states = inputs_embeds
@@ -1628,32 +1569,91 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         num_transfer_tokens_schedule = self._get_num_transfer_tokens(
             block_length, denoising_steps_per_block
         )
+        # accumulated_kv: grows incrementally block by block (O(N) total cost).
+        # None means no prefix tokens yet (first block with empty prompt).
+        accumulated_kv = None
+
         for num_block in range(prefill_blocks, num_blocks):
+            prefix_end = num_block * block_length
             current_window_end = (num_block + 1) * block_length
-            cur_x = x[:, :current_window_end]
-            cur_attn_mask = block_diffusion_attention_mask[
-                :, :, :current_window_end, :current_window_end
+
+            # --- Build/extend the accumulated KV for the prefix ---
+            if prefix_end > 0:
+                if accumulated_kv is None:
+                    # First block: full prefill of the prompt (only time we process all tokens).
+                    prefix_out = self.forward(
+                        x[:, :prefix_end],
+                        attention_mask=block_diffusion_attention_mask[
+                            :, :, :prefix_end, :prefix_end
+                        ],
+                        position_ids=position_ids[:, :prefix_end],
+                        use_cache=True,
+                        return_dict=True,
+                    )
+                    accumulated_kv = prefix_out.past_key_values
+                    del prefix_out
+                else:
+                    # Subsequent blocks: forward only the 32 newly committed tokens,
+                    # extending the accumulated KV by one block at O(32 × prefix_end) cost.
+                    prev_prefix_end = prefix_end - block_length
+                    incr_out = self.forward(
+                        x[:, prev_prefix_end:prefix_end],
+                        attention_mask=block_diffusion_attention_mask[
+                            :, :, prev_prefix_end:prefix_end, :prefix_end
+                        ],
+                        position_ids=position_ids[:, prev_prefix_end:prefix_end],
+                        past_key_values=accumulated_kv,
+                        use_cache=True,
+                        return_dict=True,
+                    )
+                    accumulated_kv = incr_out.past_key_values
+                    del incr_out
+
+                # Extract tensor references (no copy). DynamicLayer.update() creates new
+                # tensors via torch.cat, so the originals here are never mutated by denoising.
+                prefix_kv_pairs = [(layer.keys, layer.values) for layer in accumulated_kv.layers]
+            else:
+                prefix_kv_pairs = []
+
+            # Attention mask for block tokens attending to [prefix KV cache + block itself]
+            block_attn_mask = block_diffusion_attention_mask[
+                :, :, prefix_end:current_window_end, :current_window_end
             ]
-            cur_position_ids = position_ids[:, :current_window_end]
+            block_position_ids = position_ids[:, prefix_end:current_window_end]
+            # View into x: mutations here propagate to x automatically.
+            cur_block_x = x[:, prefix_end:current_window_end]
 
             for step in range(denoising_steps_per_block):
-                active_block_mask = cur_x[:, -block_length:] == mask_id
+                active_block_mask = cur_block_x == mask_id
                 if active_block_mask.sum() == 0:
                     break
 
-                # @sicheng
-                # logits = self.forward(
-                #     cur_x,
-                #     attention_mask=cur_attn_mask,
-                #     position_ids=cur_position_ids,
-                # ).logits
+                # Build a fresh DynamicCache from static prefix references each step.
+                # DynamicLayer.update() does torch.cat → new tensor stored back into
+                # layer.keys/values, leaving the original prefix tensors untouched.
+                if prefix_kv_pairs:
+                    fresh_cache = DynamicCache()
+                    for (pk, pv) in prefix_kv_pairs:
+                        layer = DynamicLayer()
+                        layer.keys = pk
+                        layer.values = pv
+                        layer.is_initialized = True
+                        layer.dtype = pk.dtype
+                        layer.device = pk.device
+                        fresh_cache.layers.append(layer)
+                else:
+                    fresh_cache = None
+
                 outputs = self.forward(
-                    cur_x,
-                    attention_mask=cur_attn_mask,
-                    position_ids=cur_position_ids,
+                    cur_block_x,
+                    attention_mask=block_attn_mask,
+                    position_ids=block_position_ids,
+                    past_key_values=fresh_cache,
+                    use_cache=False,
                     output_router_logits=True,
                     return_dict=True,
                 )
+                # logits is already block-only: [bsz, block_length, vocab_size]
                 logits = outputs.logits
 
                 # @sicheng
@@ -1662,19 +1662,11 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                     active_block_mask=active_block_mask,
                     block_length=block_length,
                 )
-
-                # @sicheng: print
-                # if step==0:
-                # print(
-                #     f"Block {num_block}, Avg Unique Experts = {step_avg_unique:.2f}, Per Layer Unique Experts = {step_per_layer_unique}"
-                # )
                 total_avg_unique_experts += step_avg_unique
                 total_denoise_forwards += 1
 
-
-                active_logits = logits[:, -block_length:, :]
                 x0, x0_p = self._sample_with_temperature_topk_topp(
-                    active_logits, temperature=temperature, top_k=top_k, top_p=top_p
+                    logits, temperature=temperature, top_k=top_k, top_p=top_p
                 )
 
                 num_to_transfer = num_transfer_tokens_schedule[step].item()
@@ -1694,27 +1686,22 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                     transfer_index[0, idx] = True
 
                 if transfer_index.any():
-                    cur_x[:, -block_length:][transfer_index] = x0[transfer_index]
+                    # cur_block_x is a view of x, so x is updated in-place.
+                    cur_block_x[transfer_index] = x0[transfer_index]
                 if eos_early_stop and (x0[transfer_index] == eos_id).any():
-                    eos_pos_in_x = (cur_x[0] == eos_id).nonzero(as_tuple=True)
+                    eos_pos_in_x = (x[0] == eos_id).nonzero(as_tuple=True)
                     if len(eos_pos_in_x[0]) > 0:
                         eos_pos = eos_pos_in_x[0][0].item()
-                        if (cur_x[0, prompt_length:eos_pos] != mask_id).all():
-                            final_x = x[:, :total_length][:, : eos_pos + 1]
-
-                            # @sicheng
+                        if (x[0, prompt_length:eos_pos] != mask_id).all():
+                            final_x = x[:, :total_length][:, :eos_pos + 1]
                             if total_denoise_forwards > 0:
                                 avg_unique_experts_per_layer = (
                                     total_avg_unique_experts / total_denoise_forwards
                                 )
                             else:
                                 avg_unique_experts_per_layer = 0.0
-
-                            # @sicheng
-                            # return final_x
                             return final_x, avg_unique_experts_per_layer
 
-            x[:, :current_window_end] = cur_x
             if (
                 eos_id is not None
                 and (x[0, prompt_length:current_window_end] == eos_id).any()
@@ -1746,6 +1733,7 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
             :, input_ids.shape[1] : input_ids.shape[1] + first_mask_position + 1
         ], avg_unique_experts_per_layer
 
+    # @sicheng: not update, old version
     @torch.no_grad()
     def generate_timer(
         self,
