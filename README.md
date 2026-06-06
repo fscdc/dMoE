@@ -64,10 +64,6 @@ We present **dMoE**, a framework that introduces Learnable Block Experts into di
 |-------|-------------|--------------|------|
 | 🤖 dMoE-16B | General-purpose dLLM with learnable block experts | LLaDA-2.0-mini | [Hugging Face](https://huggingface.co/FSCCS/dMoE-16B) |
 
-<!-- | Dataset | Description | Link |
-|---------|-------------|------|
-| 📊 dMoE-Training-Data | Coming soon | Coming soon | -->
-
 ---
 
 ## 🚀 Quick Start
@@ -76,6 +72,7 @@ We present **dMoE**, a framework that introduces Learnable Block Experts into di
 git clone https://github.com/fscdc/dMoE.git
 cd dMoE
 
+# not include all but main libraries
 conda create -n dmoe python==3.12
 conda activate dmoe
 pip install -r ./evaluations/requirements.txt
