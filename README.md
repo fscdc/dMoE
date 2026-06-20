@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/fb2fb91d-5d25-4cb1-8d46-2f2fe4248f05
 
 ## ⭐ Updates
 
-- **[4.26.2026]**: Code and model are released. ArXiv submission is on hold; paper preview available [here](assets/arxiv_1.pdf).
+- **[4.26.2026]**: Paper, code and model are released. 
 
 ---
 
