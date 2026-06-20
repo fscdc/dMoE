@@ -71,27 +71,83 @@ def draw_length_distribution(length, correct_length, wrong_length, file_name):
     plt.savefig(file_name)
 
 
+_DIGIT_TO_LETTER = {"1": "A", "2": "B", "3": "C", "4": "D"}
+
+def normalize_answer_key(key):
+    """Normalize ARC-C answerKey: '1'/'2'/'3'/'4' → 'A'/'B'/'C'/'D'."""
+    return _DIGIT_TO_LETTER.get(str(key), str(key)).upper()
+
+
+def extract_answer_arc(document):
+    """
+    Extract predicted answer letter (A/B/C/D) from model output for ARC-C.
+    Returns (prediction, confidence):
+      'boxed'       - \\boxed{A}  (matches prompt format)
+      'answer_tag'  - "Answer: A" anywhere
+      'explicit'    - "the answer is A", "correct answer is A", etc.
+      'pattern'     - weaker patterns: "(A)", "Option A", "**A**"
+      'last_letter' - last standalone A-D letter (lowest confidence)
+      None          - no answer found
+    """
+    document = str(document)
+
+    # 1. \boxed{A} — matches prompt format exactly
+    m = re.search(r'\\boxed\{([^}]*)\}', document)
+    if m:
+        cm = re.search(r'\b([ABCD])\b', m.group(1))
+        if cm:
+            return cm.group(1).upper(), 'boxed'
+
+    # 2. "Answer: X" — take last occurrence
+    matches = re.findall(r'(?i)Answer\s*:\s*\**\s*([A-D])\b', document)
+    if matches:
+        return matches[-1].upper(), 'answer_tag'
+
+    # 3. Explicit answer phrases — take last occurrence
+    explicit_patterns = [
+        r'(?i)(?:the\s+)?correct\s+answer\s+is\s*:?\s*\**([A-D])\b',
+        r'(?i)(?:the\s+)?answer\s+is\s*:?\s*\**([A-D])\b',
+        r'(?i)(?:so|thus|therefore)[,\s]+(?:the\s+)?(?:correct\s+)?answer\s+is\s*:?\s*\**([A-D])\b',
+        r'(?i)I\s+(?:would\s+)?(?:choose|select|pick)\s+:?\s*\**([A-D])\b',
+    ]
+    for pat in explicit_patterns:
+        matches = re.findall(pat, document)
+        if matches:
+            return matches[-1].upper(), 'explicit'
+
+    # 4. Weaker structural patterns — take last occurrence
+    weak_patterns = [
+        r'(?i)is\s+option\s*:?\s*([A-D])\b',
+        r'(?i)\*\*Answer:\*\*\s*([A-D])\b',
+        r'(?i)Option\s+([A-D])\b',
+        r'\(([A-D])\)',
+        r'(?i)\b([A-D])\s+is\s+(?:correct|right)\b',
+    ]
+    for pat in weak_patterns:
+        matches = re.findall(pat, document)
+        if matches:
+            return matches[-1].upper(), 'pattern'
+
+    # 5. Last standalone letter A-D (lowest confidence fallback)
+    matches = re.findall(r'\b([A-D])\b', document)
+    if matches:
+        return matches[-1].upper(), 'last_letter'
+
+    return None, None
+
+
+_STRICT_CONFIDENCE = {'boxed', 'answer_tag', 'explicit'}
+_FLEXIBLE_CONFIDENCE = {'boxed', 'answer_tag', 'explicit', 'pattern', 'last_letter'}
+
+
 def extract_boxed_text(document):
-    # Match content inside \boxed{...}
-    pattern = r"\\boxed\{([^}]*)\}"
-    matches = re.findall(pattern, document)
-
-    # Extract fallback numbers (just keep your logic)
-    numbers = re.findall(r'\b\d+\.?\d*\b', document)
-    f_matches = [numbers[-1]] if numbers else None
-
-    if len(matches) == 1:
-        # DIRECT FIX: keep letters instead of filtering by digits
-        content = matches[-1].strip()
-        s_matches = [content]  # return as list to mimic original style
-        f_matches = s_matches  # overwrite fallback with the boxed content
-    elif len(matches) > 1:
-        content = matches[-1].strip()
-        s_matches = [content]
-    else:
-        s_matches = matches  # empty list
-
-    return s_matches, f_matches
+    """Legacy wrapper — returns (strict_list, flexible_list) for backward compat."""
+    prediction, confidence = extract_answer_arc(document)
+    if confidence in _STRICT_CONFIDENCE:
+        return [prediction], [prediction]
+    elif confidence in _FLEXIBLE_CONFIDENCE:
+        return [], [prediction]
+    return [], None
 
 
 
@@ -129,69 +185,65 @@ def process_target(target, dataset):
     
 def evaluation(result_file):
     results = []
-    f = open(result_file, 'r')
-    for line in f:
-        results.append(json.loads(line))
-    f.close()
+    with open(result_file, 'r') as f:
+        for line in f:
+            results.append(json.loads(line))
 
     total, s_correct, f_correct = 0, 0, 0
-    total_time, total_token, total_useful_token = 0, 0, 0
-    
+    no_answer = 0
+    total_time, total_token = 0, 0
+    total_useful_token = 0
     total_steps = 0
     total_experts = 0
-    for idx, problem in enumerate(results):
+    confidence_counts = {}
 
+    for problem in results:
         answer = problem['answer'][0]
-        strict_predict_ans, flexible_predict_ans = extract_boxed_text(answer)
-        target = problem['task']['answerKey']
+        target = normalize_answer_key(problem['task']['answerKey'])
 
-        # target = process_target(target, 'gsm8k')
+        prediction, confidence = extract_answer_arc(answer)
 
         total += 1
-        
-        if len(strict_predict_ans) > 0 or (flexible_predict_ans is not None and len(flexible_predict_ans) > 0): 
-            try:
-                correct_flag = False
-                if len(strict_predict_ans) > 0 and str(strict_predict_ans[0]) == str(target):
-                    s_correct += 1
-                    f_correct += 1
-                    correct_flag = True
-                elif str(flexible_predict_ans[0]) == str(target):
-                    f_correct += 1
-                    correct_flag = True
-                elif args.relax and flexible_predict_ans[1] is not None and str(flexible_predict_ans[1]) == str(target):
-                    f_correct += 1
-                    correct_flag = True             
-
-                #print(f"Correct = {correct_flag}, \tStrict Predict = {strict_predict_ans},\t Flexible Predict = {flexible_predict_ans}, \tTarget = {target}")
-            except:
-                #print('Error in extracting answers: ', strict_predict_ans, flexible_predict_ans)
-                pass
-        else:
-            #print('No answer found: ', idx, target)
-            pass
-
         total_time += problem['time']
         total_token += problem['tokens']
-        total_useful_token += problem['useful_tokens']
-
-        total_steps += problem['steps']
+        total_useful_token += problem.get('useful_tokens', 0)
+        total_steps += problem.get('steps', 0)
         total_experts += problem.get('unique_experts_count', 0)
-     
+
+        confidence_counts[confidence] = confidence_counts.get(confidence, 0) + 1
+
+        if prediction is None:
+            no_answer += 1
+            continue
+
+        correct = prediction.upper() == target
+        if correct:
+            if confidence in _STRICT_CONFIDENCE:
+                s_correct += 1
+                f_correct += 1
+            else:
+                f_correct += 1
+
+    print(f"Strict  Accuracy = {s_correct}/{total} = {s_correct/total:.4f}  (boxed/answer_tag/explicit)")
+    print(f"Flexible Accuracy = {f_correct}/{total} = {f_correct/total:.4f}  (all patterns)")
+    print(f"No answer found   = {no_answer}/{total}")
+    print(f"Confidence breakdown: {confidence_counts}")
+
     return {
         'strict_accuracy': s_correct / total,
         'soft_accuracy': f_correct / total,
         'strict_match': s_correct,
         'soft_match': f_correct,
         'total': total,
+        'no_answer': no_answer,
         'total_time': total_time,
         'total_token': total_token,
         'avg_token': total_token / total,
-        'avg_useful_token': total_useful_token / total,
+        'avg_useful_token': total_useful_token / total if total_useful_token else 0,
         'token/s': total_token / total_time,
-        'useful_token/s': total_useful_token / total_time,
         'avg_steps': total_steps / total if total > 0 else -1,
         'unique_experts': total_experts / total if total > 0 else -1,
+        'confidence_breakdown': confidence_counts,
     }
 
 def passk_evaluation(result_files):
@@ -217,7 +269,7 @@ def passk_evaluation(result_files):
 
     for qid in range(num_questions):
 
-        target = all_results[0][qid]['task']['answerKey']
+        target = normalize_answer_key(all_results[0][qid]['task']['answerKey'])
 
         strict_hit = False
         soft_hit = False
@@ -225,26 +277,20 @@ def passk_evaluation(result_files):
         for fidx in range(num_files):
 
             answer = all_results[fidx][qid]['answer'][0]
-            strict_ans, flexible_ans = extract_boxed_text(answer)
 
             try:
-                # strict match
-                if strict_ans is not None and len(strict_ans) > 0 and str(strict_ans[0]) == str(target):
-                    strict_hit = True
-                    soft_hit = True
-                    break
-
-                # soft match
-                if flexible_ans is not None and len(flexible_ans) > 0 and str(flexible_ans[0]) == str(target):
-                    soft_hit = True
-                    break
-
-                # relaxed flexible match
-                if flexible_ans is not None and len(flexible_ans) > 1 and \
-                   args.relax and flexible_ans[1] is not None and str(flexible_ans[1]) == str(target):
-                    soft_hit = True
-                    break
-
+                prediction, confidence = extract_answer_arc(answer)
+                if prediction is None:
+                    continue
+                correct = prediction.upper() == target
+                if correct:
+                    if confidence in _STRICT_CONFIDENCE:
+                        strict_hit = True
+                        soft_hit = True
+                        break
+                    else:
+                        soft_hit = True
+                        break
             except Exception:
                 continue
 

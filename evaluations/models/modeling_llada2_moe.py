@@ -27,7 +27,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 
 from transformers.activations import ACT2FN
-from transformers.cache_utils import Cache, DynamicCache
+from transformers.cache_utils import Cache, DynamicCache, DynamicLayer
 from transformers.modeling_attn_mask_utils import (
     _prepare_4d_causal_attention_mask_for_sdpa,
 )
@@ -1161,6 +1161,7 @@ class LLaDA2MoeModel(LLaDA2MoePreTrainedModel):
                 device=inputs_embeds.device,
             )
             position_ids = position_ids.unsqueeze(0)
+        total_kv_len = past_seen_tokens + seq_length
         if attention_mask.size() == (batch_size, 1, seq_length, seq_length):
             attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
                 attention_mask,
@@ -1168,9 +1169,14 @@ class LLaDA2MoeModel(LLaDA2MoePreTrainedModel):
                 inputs_embeds,
                 past_seen_tokens,
             )
+        elif attention_mask.size() == (batch_size, 1, seq_length, total_kv_len):
+            pass  # KV-cache forward: mask is already (B, 1, q_len, kv_len)
         else:
             raise ValueError(
-                f"LLaDA2.0 only support block attention mask with shape: {(batch_size, 1, seq_length, seq_length)}, the input attention with shape {attention_mask.size()=}!"
+                f"LLaDA2.0 only support block attention mask with shape: "
+                f"{(batch_size, 1, seq_length, seq_length)} or "
+                f"{(batch_size, 1, seq_length, total_kv_len)}, "
+                f"got {attention_mask.size()=}!"
             )
         # embed positions
         hidden_states = inputs_embeds
@@ -1471,6 +1477,24 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         return model_inputs
 
     @staticmethod
+    def _build_prefix_cache(prefix_kv_pairs):
+        """Build a read-only DynamicCache from stored (keys, values) pairs.
+        DynamicLayer.update() creates new tensors via torch.cat, so the original
+        prefix references remain valid after the forward pass."""
+        if not prefix_kv_pairs:
+            return None
+        cache = DynamicCache()
+        for pk, pv in prefix_kv_pairs:
+            layer = DynamicLayer()
+            layer.keys = pk
+            layer.values = pv
+            layer.is_initialized = True
+            layer.dtype = pk.dtype
+            layer.device = pk.device
+            cache.layers.append(layer)
+        return cache
+
+    @staticmethod
     def _reorder_cache(past_key_values, beam_idx):
         reordered_past = ()
         for layer_past in past_key_values:
@@ -1658,9 +1682,6 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         x = torch.full((1, total_length), mask_id, dtype=torch.long, device=self.device)
         x[:, :prompt_length] = input_ids.clone()
 
-        prompt_index_full = torch.zeros_like(x, dtype=torch.bool)
-        prompt_index_full[:, :prompt_length] = True
-
         # @sicheng
         total_avg_unique_experts = 0.0
         total_denoise_forwards = 0
@@ -1671,33 +1692,78 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         num_transfer_tokens_schedule = self._get_num_transfer_tokens(
             block_length, denoising_steps_per_block
         )
+
+        # KV cache: accumulated_kv grows block-by-block (O(N) total cost).
+        # Each denoising step builds a fresh read-only cache from frozen prefix references;
+        # DynamicLayer.update() creates new tensors via torch.cat so the originals stay valid.
+        accumulated_kv = None
+
         for num_block in range(prefill_blocks, num_blocks):
+            prefix_end = num_block * block_length
             current_window_end = (num_block + 1) * block_length
-            cur_x = x[:, :current_window_end]
-            cur_attn_mask = block_diffusion_attention_mask[
-                :, :, :current_window_end, :current_window_end
+
+            # Build/extend prefix KV cache.
+            if prefix_end > 0:
+                if accumulated_kv is None:
+                    # First non-empty prefix: full prefill of all prompt tokens.
+                    prefix_out = self.forward(
+                        x[:, :prefix_end],
+                        attention_mask=block_diffusion_attention_mask[:, :, :prefix_end, :prefix_end],
+                        position_ids=position_ids[:, :prefix_end],
+                        use_cache=True,
+                        output_router_logits=False,
+                        return_dict=True,
+                    )
+                    accumulated_kv = prefix_out.past_key_values
+                    del prefix_out
+                else:
+                    # Incremental: extend by the previous block's final tokens only.
+                    prev_prefix_end = prefix_end - block_length
+                    incr_out = self.forward(
+                        x[:, prev_prefix_end:prefix_end],
+                        attention_mask=block_diffusion_attention_mask[
+                            :, :, prev_prefix_end:prefix_end, :prefix_end
+                        ],
+                        position_ids=position_ids[:, prev_prefix_end:prefix_end],
+                        past_key_values=accumulated_kv,
+                        use_cache=True,
+                        output_router_logits=False,
+                        return_dict=True,
+                    )
+                    accumulated_kv = incr_out.past_key_values
+                    del incr_out
+
+            # Snapshot prefix K/V references (no copy; DynamicLayer.update creates new
+            # tensors and never mutates these originals).
+            if accumulated_kv is not None:
+                prefix_kv_pairs = [(layer.keys, layer.values) for layer in accumulated_kv.layers]
+            else:
+                prefix_kv_pairs = []
+
+            block_attn_mask = block_diffusion_attention_mask[
+                :, :, prefix_end:current_window_end, :current_window_end
             ]
-            cur_position_ids = position_ids[:, :current_window_end]
+            block_position_ids = position_ids[:, prefix_end:current_window_end]
+            cur_block_x = x[:, prefix_end:current_window_end]  # view into x
 
             for step in range(denoising_steps_per_block):
-                active_block_mask = cur_x[:, -block_length:] == mask_id
+                active_block_mask = cur_block_x == mask_id
                 if active_block_mask.sum() == 0:
                     break
 
-                # @sicheng
-                # logits = self.forward(
-                #     cur_x,
-                #     attention_mask=cur_attn_mask,
-                #     position_ids=cur_position_ids,
-                # ).logits
+                # Fresh cache from frozen prefix references; rebuilt every step.
+                fresh_cache = self._build_prefix_cache(prefix_kv_pairs)
+
                 outputs = self.forward(
-                    cur_x,
-                    attention_mask=cur_attn_mask,
-                    position_ids=cur_position_ids,
+                    cur_block_x,
+                    attention_mask=block_attn_mask,
+                    position_ids=block_position_ids,
+                    past_key_values=fresh_cache,
+                    use_cache=False,
                     output_router_logits=True,
                     return_dict=True,
                 )
-                logits = outputs.logits
+                logits = outputs.logits  # [B, block_length, vocab_size]
 
                 # @sicheng
                 step_avg_unique, step_per_layer_unique = self._compute_avg_unique_experts_per_layer(
@@ -1705,19 +1771,11 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                     active_block_mask=active_block_mask,
                     block_length=block_length,
                 )
-
-                # @sicheng: print
-                # if step==0:
-                # print(
-                #     f"Block {num_block}, Avg Unique Experts = {step_avg_unique:.2f}, Per Layer Unique Experts = {step_per_layer_unique}"
-                # )
                 total_avg_unique_experts += step_avg_unique
                 total_denoise_forwards += 1
 
-
-                active_logits = logits[:, -block_length:, :]
                 x0, x0_p = self._sample_with_temperature_topk_topp(
-                    active_logits, temperature=temperature, top_k=top_k, top_p=top_p
+                    logits, temperature=temperature, top_k=top_k, top_p=top_p
                 )
 
                 num_to_transfer = num_transfer_tokens_schedule[step].item()
@@ -1737,12 +1795,13 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                     transfer_index[0, idx] = True
 
                 if transfer_index.any():
-                    cur_x[:, -block_length:][transfer_index] = x0[transfer_index]
+                    cur_block_x[transfer_index] = x0[transfer_index]
+
                 if eos_early_stop and (x0[transfer_index] == eos_id).any():
-                    eos_pos_in_x = (cur_x[0] == eos_id).nonzero(as_tuple=True)
+                    eos_pos_in_x = (x[0] == eos_id).nonzero(as_tuple=True)
                     if len(eos_pos_in_x[0]) > 0:
                         eos_pos = eos_pos_in_x[0][0].item()
-                        if (cur_x[0, prompt_length:eos_pos] != mask_id).all():
+                        if (x[0, prompt_length:eos_pos] != mask_id).all():
                             final_x = x[:, :total_length][:, : eos_pos + 1]
 
                             # @sicheng
@@ -1753,11 +1812,8 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                             else:
                                 avg_unique_experts_per_layer = 0.0
 
-                            # @sicheng
-                            # return final_x
                             return final_x, avg_unique_experts_per_layer
 
-            x[:, :current_window_end] = cur_x
             if (
                 eos_id is not None
                 and (x[0, prompt_length:current_window_end] == eos_id).any()
@@ -1775,9 +1831,6 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
             first_mask_position = gen_length
 
         # @sicheng
-        # return generated_answer[
-        #     :, input_ids.shape[1] : input_ids.shape[1] + first_mask_position + 1
-        # ]
         if total_denoise_forwards > 0:
             avg_unique_experts_per_layer = (
                 total_avg_unique_experts / total_denoise_forwards
@@ -1845,19 +1898,59 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
             block_length, denoising_steps_per_block
         )
 
+        # KV cache (same strategy as generate())
+        accumulated_kv = None
+
         for num_block in range(prefill_blocks, num_blocks):
+            prefix_end = num_block * block_length
             current_window_end = (num_block + 1) * block_length
-            cur_x = x[:, :current_window_end]
-            cur_attn_mask = block_diffusion_attention_mask[
-                :, :, :current_window_end, :current_window_end
+
+            if prefix_end > 0:
+                if accumulated_kv is None:
+                    prefix_out = self.forward(
+                        x[:, :prefix_end],
+                        attention_mask=block_diffusion_attention_mask[:, :, :prefix_end, :prefix_end],
+                        position_ids=position_ids[:, :prefix_end],
+                        use_cache=True,
+                        output_router_logits=False,
+                        return_dict=True,
+                    )
+                    accumulated_kv = prefix_out.past_key_values
+                    del prefix_out
+                else:
+                    prev_prefix_end = prefix_end - block_length
+                    incr_out = self.forward(
+                        x[:, prev_prefix_end:prefix_end],
+                        attention_mask=block_diffusion_attention_mask[
+                            :, :, prev_prefix_end:prefix_end, :prefix_end
+                        ],
+                        position_ids=position_ids[:, prev_prefix_end:prefix_end],
+                        past_key_values=accumulated_kv,
+                        use_cache=True,
+                        output_router_logits=False,
+                        return_dict=True,
+                    )
+                    accumulated_kv = incr_out.past_key_values
+                    del incr_out
+
+            if accumulated_kv is not None:
+                prefix_kv_pairs = [(layer.keys, layer.values) for layer in accumulated_kv.layers]
+            else:
+                prefix_kv_pairs = []
+
+            block_attn_mask = block_diffusion_attention_mask[
+                :, :, prefix_end:current_window_end, :current_window_end
             ]
-            cur_position_ids = position_ids[:, :current_window_end]
+            block_position_ids = position_ids[:, prefix_end:current_window_end]
+            cur_block_x = x[:, prefix_end:current_window_end]
 
             for step in range(denoising_steps_per_block):
-                active_block_mask = cur_x[:, -block_length:] == mask_id
+                active_block_mask = cur_block_x == mask_id
                 active_tokens = int(active_block_mask.sum().item())
                 if active_tokens == 0:
                     break
+
+                fresh_cache = self._build_prefix_cache(prefix_kv_pairs)
 
                 self._reset_step_profile()
 
@@ -1866,9 +1959,11 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
 
                 step_start.record()
                 outputs = self.forward(
-                    cur_x,
-                    attention_mask=cur_attn_mask,
-                    position_ids=cur_position_ids,
+                    cur_block_x,
+                    attention_mask=block_attn_mask,
+                    position_ids=block_position_ids,
+                    past_key_values=fresh_cache,
+                    use_cache=False,
                     output_router_logits=True,
                     return_dict=True,
                 )
@@ -1876,7 +1971,7 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                 torch.cuda.synchronize()
                 step_forward_ms = step_start.elapsed_time(step_end)
 
-                logits = outputs.logits
+                logits = outputs.logits  # [B, block_length, vocab_size]
 
                 step_avg_unique, step_per_layer_unique = self._compute_avg_unique_experts_per_layer(
                     outputs.router_logits,
@@ -1887,9 +1982,8 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                 total_avg_unique_experts += step_avg_unique
                 total_denoise_forwards += 1
 
-                active_logits = logits[:, -block_length:, :]
                 x0, x0_p = self._sample_with_temperature_topk_topp(
-                    active_logits, temperature=temperature, top_k=top_k, top_p=top_p
+                    logits, temperature=temperature, top_k=top_k, top_p=top_p
                 )
 
                 num_to_transfer = num_transfer_tokens_schedule[step].item()
@@ -1911,7 +2005,7 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                 accepted_tokens = int(transfer_index.sum().item())
 
                 if transfer_index.any():
-                    cur_x[:, -block_length:][transfer_index] = x0[transfer_index]
+                    cur_block_x[transfer_index] = x0[transfer_index]
 
                 step_profile = self.profiler.snapshot() if self.profiler is not None else {}
                 step_time_summary = self._summarize_step_profile(step_profile, step_forward_ms)
@@ -1931,10 +2025,10 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
                 )
 
                 if eos_early_stop and (x0[transfer_index] == eos_id).any():
-                    eos_pos_in_x = (cur_x[0] == eos_id).nonzero(as_tuple=True)
+                    eos_pos_in_x = (x[0] == eos_id).nonzero(as_tuple=True)
                     if len(eos_pos_in_x[0]) > 0:
                         eos_pos = eos_pos_in_x[0][0].item()
-                        if (cur_x[0, prompt_length:eos_pos] != mask_id).all():
+                        if (x[0, prompt_length:eos_pos] != mask_id).all():
                             final_x = x[:, :total_length][:, : eos_pos + 1]
 
                             if total_denoise_forwards > 0:
@@ -1956,7 +2050,6 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
 
                             return final_x, avg_unique_experts_per_layer, time_records
 
-            x[:, :current_window_end] = cur_x
             if (
                 eos_id is not None
                 and (x[0, prompt_length:current_window_end] == eos_id).any()
