@@ -1839,7 +1839,7 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
             avg_unique_experts_per_layer = 0.0
 
         return generated_answer[
-            :, input_ids.shape[1] : input_ids.shape[1] + first_mask_position + 1
+            :, : input_ids.shape[1] + first_mask_position + 1
         ], avg_unique_experts_per_layer
 
     @torch.no_grad()
@@ -2085,7 +2085,7 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
 
         return (
             generated_answer[
-                :, input_ids.shape[1] : input_ids.shape[1] + first_mask_position + 1
+                :, : input_ids.shape[1] + first_mask_position + 1
             ],
             avg_unique_experts_per_layer,
             time_records,

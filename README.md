@@ -54,7 +54,7 @@ https://github.com/user-attachments/assets/fb2fb91d-5d25-4cb1-8d46-2f2fe4248f05
 
 We present **dMoE**, a framework that introduces Learnable Block Experts into diffusion large language models (dLLMs).
 
-![Overview](assets/overview.png)
+![Overview](assets/overview.png) 
 
 ---
 
