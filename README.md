@@ -24,7 +24,8 @@ https://github.com/user-attachments/assets/fb2fb91d-5d25-4cb1-8d46-2f2fe4248f05
 
 ## ⭐ Updates
 
-- **[4.26.2026]**: Paper, code and model are released. 
+- - **[9.24.2026]**: dMoE was accepted by NeurIPS 2026!
+- - **[4.26.2026]**: Paper, code and model are released. 
 
 ---
 
