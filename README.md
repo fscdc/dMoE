@@ -1,5 +1,5 @@
 <div align="center">
-      <h2><b> dMoE: dLLMs with Learnable Block Experts </b></h2>
+      <h2><b> [NeurIPS 2026] dMoE: dLLMs with Learnable Block Experts </b></h2>
 </div>
 
 <div align="center">
