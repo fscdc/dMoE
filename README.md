@@ -15,9 +15,9 @@
 
 > **[dMoE: dLLMs with Learnable Block Experts](https://arxiv.org/abs/2605.30876)** \
 > [Sicheng Feng](https://fscdc.github.io/)<sup>1</sup>, [Zigeng Chen](https://czg1225.github.io/chenzigeng99/)<sup>1</sup>, [Gongfan Fang](https://fangggf.github.io/)<sup>1</sup>, [Xinyin Ma](https://horseee.github.io/)<sup>1</sup>, [Xinchao Wang](https://sites.google.com/site/sitexinchaowang/)<sup>1,*</sup> \
+> NeurIPS 2026 \
 > <sup>1</sup>National University of Singapore, Singapore \
-> <sup>∗</sup>Corresponding author: xinchao@nus.edu.sg \
-> NeurIPS 2026
+> <sup>∗</sup>Corresponding author: xinchao@nus.edu.sg
 
 ---
 
