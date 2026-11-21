@@ -23,6 +23,7 @@
 
 ## ⭐ Updates
 
+- - **[19.11.2026]**: dMoE was adopted by [DiffuSpace's Clover-35B-A3B-Preview](https://arxiv.org/abs/2611.24636), which uses dMoE's block-level expert coreset routing by default.
 - - **[9.24.2026]**: dMoE was accepted by NeurIPS 2026!
 - - **[4.26.2026]**: Paper, code and model are released. 
 
